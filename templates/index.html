@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SchoolBot Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://code.highcharts.com/highcharts.js"></script>
+  <script src="https://code.highcharts.com/modules/exporting.js"></script>
+  <script src="https://code.highcharts.com/modules/export-data.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="chat-panel">
+      <div id="chat-window" class="chat-window"></div>
+      <div class="input-panel">
+        <input id="user-input" type="text" placeholder="Ask a question..." autofocus>
+        <button onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+    <div class="result-panel">
+      <div class="toolbar">
+        <label for="chart-type">Chart type:</label>
+        <select id="chart-type">
+          <option value="auto">Auto</option>
+          <option value="bar">Bar</option>
+          <option value="line">Line</option>
+          <option value="stacked">Stacked Bar</option>
+        </select>
+        <button onclick="exportTableToCSV()">Download CSV</button>
+        <button onclick="exportChartToPNG()">Download Chart</button>
+      </div>
+      <div id="response-table"></div>
+      <div id="response-plot" style="margin-top: 20px; padding: 10px; background: #fff; border-radius: 8px;"></div>
+    </div>
+  </div>
+
+  <script>
+    async function sendMessage() {
+      const input = document.getElementById('user-input');
+      const message = input.value.trim();
+      if (!message) return;
+
+      appendChat('user', message);
+      input.value = '';
+
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+
+      const data = await res.json();
+      appendChat('bot', data.response);
+
+      document.getElementById('response-table').innerHTML = data.table || '';
+      renderHighchart(data.plotData);
+    }
+
+    function appendChat(sender, text) {
+      const chatWindow = document.getElementById('chat-window');
+      const msg = document.createElement('div');
+      msg.className = `chat-message ${sender}`;
+      msg.innerText = text;
+      chatWindow.appendChild(msg);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function exportTableToCSV() {
+      const table = document.querySelector('#response-table table');
+      if (!table) return;
+
+      let csv = [];
+      const rows = table.querySelectorAll('tr');
+      rows.forEach(row => {
+        const cols = row.querySelectorAll('th, td');
+        const rowData = [...cols].map(col => col.innerText.replace(/\n/g, ' '));
+        csv.push(rowData.join(','));
+      });
+
+      const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'data.csv';
+      link.click();
+    }
+
+    function exportChartToPNG() {
+      if (window.chartRef) {
+        window.chartRef.exportChart({ type: 'image/png' });
+      }
+    }
+
+    function renderHighchart(plotData) {
+      if (!plotData || !plotData.categories || !plotData.series) {
+        document.getElementById('response-plot').innerHTML = '';
+        return;
+      }
+
+      const selectedChartType = document.getElementById('chart-type').value;
+      let chartType = 'column';
+
+      if (selectedChartType === 'line') chartType = 'line';
+      else if (selectedChartType === 'bar') chartType = 'bar';
+      else if (selectedChartType === 'stacked') chartType = 'column'; // type still column, just add stacking
+
+      const config = {
+        chart: { type: chartType },
+        title: { text: '' },
+        xAxis: { categories: plotData.categories },
+        yAxis: { title: { text: '' } },
+        series: plotData.series,
+        plotOptions: {
+          column: {
+            stacking: (selectedChartType === 'stacked') ? 'normal' : null
+          },
+          bar: {
+            stacking: (selectedChartType === 'stacked') ? 'normal' : null
+          }
+        },
+        exporting: { enabled: true }
+      };
+
+      window.chartRef = Highcharts.chart('response-plot', config);
+    }
+  </script>
+</body>
+</html>
