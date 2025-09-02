@@ -36,9 +36,26 @@
   </div>
 
   <script>
+
+    function confirmSchool(schoolName, adm1, adm2) {
+      console.log("Confirming school:", schoolName, adm1, adm2);
+      const message = `Use the school named "${schoolName}" in ${adm1}, ${adm2} for my previous request.`;
+      
+      document.getElementById("user-input").value = message;
+
+      sendMessage(message);
+
+
+
+
+    }
+
     async function sendMessage() {
       const input = document.getElementById('user-input');
       const message = input.value.trim();
+
+      console.log("Message: ", message);
+
       if (!message) return;
 
       appendChat('user', message);

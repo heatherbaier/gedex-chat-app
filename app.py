@@ -29,27 +29,31 @@ DB_CONFIG = {
 def index():
     return render_template('index.html')
 
+
+with open("./schema_context.txt", "r") as f:
+    global schema_context
+    schema_context = f.read()
+
+
 @app.route('/chat', methods=['POST'])
+
 def chat():
     user_message = request.json['message']
 
-    with open("./schema_context.txt", "r") as f:
-        schema_context = f.read()
+    print("User Message: ", user_message)
 
     if 'history' not in session:
         session['history'] = []
         session['current_country'] = None
         session['current_school'] = None
+        session['confirmed_adm1'] = None
+        session['confirmed_adm2'] = None
 
     lowered = user_message.lower()
     for iso in ['phl', 'khm', 'hnd', 'lby']:
         if iso in lowered or any(country in lowered for country in ['philippines', 'cambodia', 'honduras', 'libya']):
             session['current_country'] = iso.upper()
             break
-    if 'dang run' in lowered:
-        session['current_school'] = 'Dang Run'
-    elif 'froylan' in lowered:
-        session['current_school'] = 'Froylan Turcios'
 
     memory_hint = ""
     if session.get("current_country") or session.get("current_school"):
@@ -71,30 +75,71 @@ def chat():
     )
 
     assistant_message = response.choices[0].message.content
-    session['history'].append({"role": "assistant", "content": assistant_message})
-
     sql_code = extract_sql_from_response(assistant_message)
+
     result_table_html = None
     plotData = None
 
+    # === HANDLE SIMILARITY QUERY CASES ===
+    if sql_code and "similarity(" in sql_code.lower():
+        try:
+            df = run_sql_query(sql_code)
+
+            if df.empty:
+                assistant_message += "\n\n⚠️ The query ran but returned no results."
+            else:
+                # Auto-confirm top result
+                top_school = df.iloc[0]
+                session["current_school"] = top_school["school_name"]
+                session["confirmed_adm1"] = top_school.get("adm1")
+                session["confirmed_adm2"] = top_school.get("adm2")
+
+                assistant_message += f"\n\n✅ Automatically selected: **{top_school['school_name']}** in {top_school.get('adm1')}, {top_school.get('adm2')}."
+                # result_table_html = df.to_html(classes='table table-hover')
+
+                df['Confirm'] = df.apply(
+                    lambda row: (
+                        f"<button class='btn btn-sm btn-primary' "
+                        f"onclick=\"confirmSchool('{row['school_name']}', '{row['adm1']}', '{row['adm2']}')\">"
+                        f"Confirm</button>"
+                    ), axis=1
+                )
+
+                result_table_html = df.to_html(classes='table table-hover', escape=False, index=False)
+
+
+                # Force GPT to regenerate based on confirmed school
+                return jsonify({
+                    "response": assistant_message + "\n\n🔄 Reprocessing request with confirmed school...",
+                    "table": result_table_html,
+                    "plotData": None,
+                    "retry": True,
+                    "forced_query": f"Generate a school report card for {top_school['school_name']} in {top_school.get('adm1')}, {top_school.get('adm2')}."
+                })
+
+        except Exception as e:
+            assistant_message += f"\n\n⚠️ Error running similarity match:\n```\n{e}\n```"
+        return jsonify({
+            "response": assistant_message,
+            "table": result_table_html,
+            "plotData": None,
+        })
+
+    # === STANDARD SQL HANDLING ===
     if sql_code:
         try:
             df = run_sql_query(sql_code)
 
             if df.empty:
-                assistant_message += "\n\n\u26a0\ufe0f The query ran but returned no results."
+                assistant_message += "\n\n⚠️ The query ran but returned no results."
             else:
-                if "similarity(" in sql_code.lower():
-                    assistant_message += "\n\n\u2705 I found similar schools. Choose one to continue."
-                    result_table_html = df.to_html(classes='table table-hover')
-                else:
-                    result_table_html = df.to_html(classes='table table-striped')
-                    plotData = auto_generate_chart(df)
-
-                    print("Plot Data:", plotData)
-
+                result_table_html = df.to_html(classes='table table-striped')
+                plotData = auto_generate_chart(df)
         except Exception as e:
-            assistant_message += f"\n\n\u26a0\ufe0f Error executing SQL:\n```\n{e}\n```"
+            assistant_message += f"\n\n⚠️ Error executing SQL:\n```\n{e}\n```"
+
+    # Save only now that we've passed similarity loop
+    session['history'].append({"role": "assistant", "content": assistant_message})
 
     return jsonify({
         "response": assistant_message,
